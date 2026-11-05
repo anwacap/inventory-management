@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from pydantic import BaseModel
+from datetime import datetime
 from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders
 
 app = FastAPI(title="Factory Inventory Management System")
@@ -119,6 +120,24 @@ class CreatePurchaseOrderRequest(BaseModel):
     unit_cost: float
     expected_delivery_date: str
     notes: Optional[str] = None
+
+class RestockingRecommendation(BaseModel):
+    item_sku: str
+    item_name: str
+    category: str
+    current_stock: int
+    forecasted_demand: int
+    shortage: int
+    unit_cost: float
+    total_cost_for_shortage: float
+    trend: str
+    priority: str
+    warehouse: str
+
+class CreateRestockingOrderRequest(BaseModel):
+    """Request to create purchase orders for multiple restocking items"""
+    items: List[dict]  # List of {sku, quantity, unit_cost, supplier_name, expected_delivery_date}
+    budget: float
 
 # API endpoints
 @app.get("/")
@@ -303,6 +322,151 @@ def get_monthly_trends():
     result = list(months.values())
     result.sort(key=lambda x: x['month'])
     return result
+
+@app.get("/api/restocking/recommendations", response_model=List[RestockingRecommendation])
+def get_restocking_recommendations(budget: Optional[float] = 10000.0):
+    """Get restocking recommendations based on demand forecasts and budget.
+
+    Ranks items by forecasted demand (highest first) and filters by budget constraint.
+    Budget is a hard limit - items exceeding it are excluded from recommendations.
+    """
+    recommendations = []
+
+    # Map inventory by SKU for quick lookup
+    inv_by_sku = {item['sku']: item for item in inventory_items}
+
+    # Get backlog item SKUs to identify priority items
+    backlog_skus = {item['item_sku'] for item in backlog_items}
+
+    # Process each demand forecast
+    for forecast in demand_forecasts:
+        sku = forecast['item_sku']
+
+        # Find matching inventory item
+        if sku not in inv_by_sku:
+            continue
+
+        inv_item = inv_by_sku[sku]
+
+        # Calculate shortage
+        shortage = max(0, forecast['forecasted_demand'] - inv_item['quantity_on_hand'])
+
+        # Skip if no shortage
+        if shortage == 0:
+            continue
+
+        # Calculate total cost for this shortage
+        total_cost = shortage * inv_item['unit_cost']
+
+        # Determine priority (high if in backlog, else based on trend)
+        priority = 'high' if sku in backlog_skus else ('medium' if forecast['trend'] == 'increasing' else 'low')
+
+        recommendations.append(RestockingRecommendation(
+            item_sku=sku,
+            item_name=forecast['item_name'],
+            category=inv_item.get('category', 'Unknown'),
+            current_stock=inv_item['quantity_on_hand'],
+            forecasted_demand=forecast['forecasted_demand'],
+            shortage=shortage,
+            unit_cost=inv_item['unit_cost'],
+            total_cost_for_shortage=total_cost,
+            trend=forecast['trend'],
+            priority=priority,
+            warehouse=inv_item['warehouse']
+        ))
+
+    # Sort by forecasted demand (highest first)
+    recommendations.sort(key=lambda x: x.forecasted_demand, reverse=True)
+
+    # Filter by budget (hard limit) - include items as long as cumulative cost doesn't exceed budget
+    cumulative_cost = 0.0
+    filtered_recommendations = []
+
+    for rec in recommendations:
+        if cumulative_cost + rec.total_cost_for_shortage <= budget:
+            filtered_recommendations.append(rec)
+            cumulative_cost += rec.total_cost_for_shortage
+        # Skip items that would exceed budget
+
+    return filtered_recommendations
+
+@app.post("/api/purchase-orders", response_model=PurchaseOrder, status_code=201)
+def create_purchase_order(request: CreatePurchaseOrderRequest):
+    """Create a new purchase order for a backlog item.
+
+    This creates a purchase order linked to a backlog item, generating a PO ID
+    and tracking the expected delivery date. Used by the restocking feature.
+    """
+    # Validate that the backlog item exists
+    backlog = next(
+        (item for item in backlog_items if item["id"] == request.backlog_item_id),
+        None
+    )
+    if not backlog:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Backlog item {request.backlog_item_id} not found"
+        )
+
+    # Create new purchase order
+    po_id = f"PO-{len(purchase_orders) + 1:04d}"
+    new_po = {
+        "id": po_id,
+        "backlog_item_id": request.backlog_item_id,
+        "supplier_name": request.supplier_name,
+        "quantity": request.quantity,
+        "unit_cost": request.unit_cost,
+        "expected_delivery_date": request.expected_delivery_date,
+        "status": "pending",
+        "created_date": datetime.now().isoformat(),
+        "notes": request.notes
+    }
+
+    # Add to in-memory list
+    purchase_orders.append(new_po)
+
+    return new_po
+
+@app.post("/api/restocking/orders", response_model=List[PurchaseOrder], status_code=201)
+def submit_restocking_orders(items: List[dict]):
+    """Submit multiple restocking items and create purchase orders for them.
+
+    This endpoint accepts a list of restocking items (from the Restocking view)
+    and creates purchase orders. It auto-generates backlog item IDs for tracking.
+
+    Each item should have:
+    - item_sku: SKU of the item
+    - item_name: Name of the item
+    - quantity: Quantity to order (shortage)
+    - unit_cost: Unit cost
+    - supplier_name: (optional) Supplier name, defaults to "Default Supplier"
+    - expected_delivery_date: (optional) Expected delivery date
+    """
+    created_orders = []
+
+    for item in items:
+        sku = item.get('item_sku', '')
+
+        # Generate a unique backlog item ID for tracking
+        backlog_item_id = f"RESTOCK-{sku}-{len(purchase_orders) + len(created_orders)}"
+
+        po_id = f"PO-{len(purchase_orders) + len(created_orders) + 1:04d}"
+        new_po = {
+            "id": po_id,
+            "backlog_item_id": backlog_item_id,
+            "supplier_name": item.get('supplier_name', 'Default Supplier'),
+            "quantity": item.get('quantity', 0),
+            "unit_cost": item.get('unit_cost', 0),
+            "expected_delivery_date": item.get('expected_delivery_date', '2025-12-31'),
+            "status": "pending",
+            "created_date": datetime.now().isoformat(),
+            "notes": f"Restocking order for {item.get('item_name', sku)}"
+        }
+
+        purchase_orders.append(new_po)
+        created_orders.append(new_po)
+
+    return created_orders
 
 if __name__ == "__main__":
     import uvicorn

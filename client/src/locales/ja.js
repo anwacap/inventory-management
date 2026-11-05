@@ -4,6 +4,7 @@ export default {
     overview: '概要',
     inventory: '在庫',
     orders: '注文',
+    restocking: '在庫補充',
     finance: '財務',
     demandForecast: '需要予測',
     companyName: '触媒コンポーネンツ',
@@ -309,6 +310,47 @@ export default {
     english: 'English',
     japanese: '日本語',
     selectLanguage: '言語を選択'
+  },
+
+  // Restocking
+  restocking: {
+    title: '在庫補充',
+    description: '需要予測に基づいて在庫補充注文を作成',
+    budgetSlider: '利用可能な予算',
+    recommendations: '在庫補充の推奨',
+    noRecommendations: '在庫補充の推奨がありません',
+    columns: {
+      sku: 'SKU',
+      itemName: '品名',
+      category: 'カテゴリー',
+      currentStock: '現在の在庫',
+      forecastedDemand: '予測需要',
+      shortage: '不足量',
+      unitCost: '単価',
+      totalCost: '合計金額',
+      trend: 'トレンド',
+      priority: '優先度',
+      warehouse: '倉庫'
+    },
+    selections: {
+      selected: '選択品目',
+      total: '合計金額',
+      budget: '予算',
+      remaining: '残額'
+    },
+    buttons: {
+      placeOrder: '注文を発注',
+      clearAll: 'すべてクリア',
+      selectAll: 'すべて選択'
+    },
+    messages: {
+      selectItems: '在庫補充注文に含める品目を選択してください',
+      exceedsBudget: '予算を超えています',
+      orderPlaced: '在庫補充注文が正常に発注されました',
+      orderFailed: '在庫補充注文の発注に失敗しました'
+    },
+    submittedOrders: '発注済み注文',
+    leadTime: 'リードタイム'
   },
 
   // Common

@@ -102,5 +102,19 @@ export const api = {
   async getPurchaseOrderByBacklogItem(backlogItemId) {
     const response = await axios.get(`${API_BASE_URL}/purchase-orders/${backlogItemId}`)
     return response.data
+  },
+
+  async getRestockingRecommendations(budget = 10000) {
+    const params = new URLSearchParams()
+    params.append('budget', budget)
+    const response = await axios.get(`${API_BASE_URL}/restocking/recommendations?${params.toString()}`)
+    return response.data
+  },
+
+  async submitRestockingOrder(items) {
+    // items: Array of { item_sku, item_name, quantity, unit_cost, supplier_name, expected_delivery_date }
+    // This submits multiple restocking items and creates purchase orders for them
+    const response = await axios.post(`${API_BASE_URL}/restocking/orders`, items)
+    return response.data
   }
 }
